@@ -6,8 +6,9 @@ Gaggenau) on the LAN, with no cloud at run time.
 An appliance announces itself on the local network and serves a WebSocket there, which a
 client with the key of the appliance's profile can speak. This module finds appliances
 and speaks to one of the AES mode: what it says of itself, the values it holds, what it
-tells as it changes. Both were run against one Thermador dishwasher. The key comes once
-from the owner's Home Connect account; fetching it is not built yet.
+tells as it changes. The key comes once from the owner's Home Connect account, which
+`account` fetches after a sign-in in the owner's browser. All of it was run against one
+Thermador dishwasher and its owner's account.
 
 The command, run from the appliances' network:
 
@@ -15,7 +16,8 @@ The command, run from the appliances' network:
 just homeconnect discover          # the appliances that announce themselves, and where
 just homeconnect discover --whole  # all each one announces
 
-export HOMECONNECT_KEY=... HOMECONNECT_IV=...   # the key and initial vector of the appliance's profile
+just homeconnect account --region na   # eu, na or cn: sign in, and get each appliance's key and initial vector
+export HOMECONNECT_KEY=... HOMECONNECT_IV=...   # what account printed for the appliance
 just homeconnect info              # its brand, its model, its versions
 just homeconnect values            # what it holds, each value under its numeric id
 just homeconnect watch             # what it says as it changes, until interrupted
