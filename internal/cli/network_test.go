@@ -67,7 +67,10 @@ func run(t *testing.T, network transport.Network, args ...string) (out, errs str
 
 	var stdout, stderr bytes.Buffer
 
-	status = cli.Run(t.Context(), cli.Environment{Args: args, Out: &stdout, Err: &stderr, Network: network})
+	status = cli.Run(t.Context(), cli.Environment{
+		Args: args, Out: &stdout, Err: &stderr, Network: network,
+		Getenv: func(name string) string { return key()[name] },
+	})
 
 	return stdout.String(), stderr.String(), status
 }

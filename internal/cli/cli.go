@@ -1,18 +1,25 @@
 // Package cli is the homeconnect command: the BSH Home Connect appliances
-// on the LAN, as they announce themselves. The wiring of flags and output
-// over the homeconnect package, with the Multicast DNS the appliances are
-// searched for over, which is the program's and not the library's.
+// on the LAN, as they announce themselves, and one of them spoken to over
+// its own WebSocket: what it says of itself, the values it holds, what it
+// tells as it changes, and any request beside. The wiring of flags and
+// output over the homeconnect package, with the Multicast DNS the
+// appliances are searched for over, which is the program's and not the
+// library's. The appliance's key comes from the environment and from
+// nowhere else.
 package cli
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/forkcloser/go-mdns/transport"
 
+	"github.com/duncanite/go-bosch/homeconnect"
 	"github.com/duncanite/go-bosch/internal/terminal"
 )
 
@@ -22,8 +29,20 @@ const (
 	ExitError = 1
 )
 
-// errUsage is a command line the command cannot act on.
-var errUsage = errors.New("cannot run")
+// The environment variables the appliance's key is read from: the key of
+// its profile, and the initial vector beside it.
+const (
+	EnvKey    = "HOMECONNECT_KEY" // #nosec G101 -- the name of an environment variable, not a credential
+	EnvVector = "HOMECONNECT_IV"
+)
+
+var (
+	// errUsage is a command line, or an environment, the command cannot
+	// act on.
+	errUsage = errors.New("cannot run")
+	// errNotFound is an appliance that did not answer a search.
+	errNotFound = errors.New("not found")
+)
 
 // exitStatus is how the parser's own exit, on --help, leaves Run: kong
 // calls its exit function and goes on, so the function panics with the
@@ -37,23 +56,48 @@ type Environment struct {
 	// Out and Err are where it writes.
 	Out io.Writer
 	Err io.Writer
+	// Getenv reads the environment, where the appliance's key is.
+	Getenv func(string) string
 	// Network is where appliances are searched for; nil is the host's own.
 	Network transport.Network
 }
 
 type rootCommand struct {
+	Host      string        `env:"HOMECONNECT_HOST"      help:"The appliance's address on the network; with none, the appliance is searched for."`
+	ID        string        `env:"HOMECONNECT_ID"        help:"The id of the appliance to speak to, as discover prints it, when several announce themselves."`
 	Interface string        `env:"HOMECONNECT_INTERFACE" help:"The network interface the appliances are on, when the host has several."`
-	Wait      time.Duration `default:"3s"                env:"HOMECONNECT_WAIT"                                                         help:"How long a search waits for appliances to answer."`
+	Wait      time.Duration `default:"3s"                env:"HOMECONNECT_WAIT"                                                                               help:"How long a search waits for appliances to answer."`
+	Timeout   time.Duration `default:"15s"               help:"How long to wait for the appliance, its search included, for every command but watch."`
 
-	Discover discoverCommand `cmd:"" help:"Print the appliances that announce themselves on this network."`
+	Discover discoverCommand `cmd:"" help:"Print the appliances that announce themselves on this network. Needs no key."`
+	Info     infoCommand     `cmd:"" help:"Print what the appliance says of itself: its brand, its model, its versions."`
+	Services servicesCommand `cmd:"" help:"Print the services the appliance has, each with its version."`
+	Values   valuesCommand   `cmd:"" help:"Print the values the appliance holds, each under its numeric id."`
+	Watch    watchCommand    `cmd:"" help:"Print what the appliance says as it says it, until interrupted."`
+	Call     callCommand     `cmd:"" help:"Send any request and print the appliance's answer."`
 
 	out     io.Writer
+	getenv  func(string) string
 	network transport.Network
+	key     homeconnect.Key
 }
 
-type discoverCommand struct {
-	Whole bool `help:"Print, under each appliance, the host it names and every entry of what it announces."`
-}
+type (
+	discoverCommand struct {
+		Whole bool `help:"Print, under each appliance, the host it names and every entry of what it announces."`
+	}
+	infoCommand struct {
+		Whole bool `help:"Print all the appliance said of itself, in JSON: its serial and its hardware address among it."`
+	}
+	servicesCommand struct{}
+	valuesCommand   struct{}
+	watchCommand    struct{}
+	callCommand     struct {
+		Action   string `arg:"" enum:"get,post,notify"                                 help:"get, post or notify."`
+		Resource string `arg:"" help:"The resource: /ro/allMandatoryValues, /ci/info."`
+		Data     string `arg:"" help:"What the request carries, in JSON."              optional:""`
+	}
+)
 
 // Run parses the arguments and runs the command.
 func Run(ctx context.Context, env Environment) (status int) {
@@ -68,12 +112,19 @@ func Run(ctx context.Context, env Environment) (status int) {
 		}
 	}()
 
-	root := rootCommand{out: env.Out, network: env.Network}
+	root := rootCommand{out: env.Out, getenv: env.Getenv, network: env.Network}
+	if root.getenv == nil {
+		root.getenv = func(string) string { return "" }
+	}
 
 	parser, err := kong.New(
 		&root,
 		kong.Name("homeconnect"),
-		kong.Description("Find the BSH Home Connect appliances on the LAN: Bosch, Thermador, Siemens, Gaggenau."),
+		kong.Description(
+			"Find the BSH Home Connect appliances on the LAN, Bosch, Thermador, Siemens, Gaggenau, and speak to one. "+
+				"The appliance's key is read from "+EnvKey+" and its initial vector from "+EnvVector+
+				": the two its profile gives, from the owner's Home Connect account.",
+		),
 		kong.UsageOnError(),
 		kong.Writers(env.Out, env.Err),
 		kong.Exit(func(code int) { panic(exitStatus(code)) }),
@@ -92,11 +143,65 @@ func Run(ctx context.Context, env Environment) (status int) {
 		return ExitError
 	}
 
-	if err = kctx.Run(&root); err != nil {
+	// What is on the network is anyone's to hear: it asks for no key.
+	if kctx.Command() != "discover" {
+		err = root.unlock()
+	}
+
+	if err == nil {
+		err = kctx.Run(&root)
+	}
+
+	if err != nil {
 		terminal.Printf(env.Err, "homeconnect: %s\n", err)
 
 		return ExitError
 	}
 
 	return ExitOK
+}
+
+// unlock reads the appliance's key from the environment. What is not set
+// is said by its variable's name.
+func (root *rootCommand) unlock() error {
+	var missing []string
+
+	for _, name := range []string{EnvKey, EnvVector} {
+		if root.getenv(name) == "" {
+			missing = append(missing, name)
+		}
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: not set in the environment: %s", errUsage, strings.Join(missing, ", "))
+	}
+
+	key, err := homeconnect.ParseKey(root.getenv(EnvKey), root.getenv(EnvVector))
+	if err != nil {
+		return fmt.Errorf("%s, %s: %w", EnvKey, EnvVector, err)
+	}
+
+	root.key = key
+
+	return nil
+}
+
+// with opens a session with the appliance, runs visit within the timeout,
+// and closes the session.
+func (root *rootCommand) with(ctx context.Context, visit func(context.Context, *homeconnect.Session) error) error {
+	if root.Timeout <= 0 {
+		return fmt.Errorf("%w: --timeout wants a time above zero", errUsage)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, root.Timeout)
+	defer cancel()
+
+	session, err := root.dial(ctx)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = session.Close() }()
+
+	return visit(ctx, session)
 }

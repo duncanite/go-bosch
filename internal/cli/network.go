@@ -43,8 +43,9 @@ func (l lent) Browse(ctx context.Context, service string, handle func(homeconnec
 }
 
 // search hears the appliances that announce themselves, for the wait, and
-// gives them in the order of their ids.
-func (root *rootCommand) search(ctx context.Context) ([]homeconnect.Found, error) {
+// gives them in the order of their ids. It ends sooner once one is
+// enough.
+func (root *rootCommand) search(ctx context.Context, enough func(homeconnect.Found) bool) ([]homeconnect.Found, error) {
 	if root.Wait <= 0 {
 		return nil, fmt.Errorf("%w: --wait wants a time above zero", errUsage)
 	}
@@ -66,6 +67,7 @@ func (root *rootCommand) search(ctx context.Context) ([]homeconnect.Found, error
 	defer cancel()
 
 	found := make(map[string]homeconnect.Found)
+	sated := false
 
 	err = homeconnect.Find(searching, lent{peer: peer}, func(appliance homeconnect.Found, lost bool) {
 		if lost {
@@ -75,13 +77,19 @@ func (root *rootCommand) search(ctx context.Context) ([]homeconnect.Found, error
 		}
 
 		found[appliance.ID] = appliance
+
+		if enough != nil && enough(appliance) {
+			sated = true
+
+			cancel()
+		}
 	})
 
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("searching for appliances: %w", context.Cause(ctx))
 	}
 
-	if !errors.Is(err, context.DeadlineExceeded) {
+	if !sated && !errors.Is(err, context.DeadlineExceeded) {
 		return nil, fmt.Errorf("searching for appliances: %w", err)
 	}
 
@@ -91,6 +99,85 @@ func (root *rootCommand) search(ctx context.Context) ([]homeconnect.Found, error
 	}
 
 	return appliances, nil
+}
+
+// dial opens a session with the appliance at --host, or with none with
+// the appliance found on the network: the one --id names, or the only
+// one there is. Among several with none named it chooses none: the key
+// is one appliance's, and a key tried at another is refused.
+func (root *rootCommand) dial(ctx context.Context) (*homeconnect.Session, error) {
+	if root.Host != "" {
+		return homeconnect.Dial(ctx, root.Host, root.key)
+	}
+
+	var enough func(homeconnect.Found) bool
+
+	if root.ID != "" {
+		enough = func(appliance homeconnect.Found) bool {
+			return appliance.ID == root.ID && len(appliance.Addresses) > 0
+		}
+	}
+
+	appliances, err := root.search(ctx, enough)
+	if err != nil {
+		return nil, err
+	}
+
+	chosen, err := root.choose(appliances)
+	if err != nil {
+		return nil, err
+	}
+
+	failure := fmt.Errorf("%w: the appliance %s announces no address; name one with --host", errNotFound, chosen.ID)
+
+	for _, address := range chosen.Addresses {
+		session, dialErr := homeconnect.Dial(ctx, address.String(), root.key)
+		if dialErr == nil {
+			return session, nil
+		}
+
+		failure = dialErr
+
+		// A key one address refused is refused at them all.
+		if errors.Is(dialErr, homeconnect.ErrKey) {
+			break
+		}
+	}
+
+	return nil, failure
+}
+
+// choose is the appliance to speak to, of those found.
+func (root *rootCommand) choose(appliances []homeconnect.Found) (homeconnect.Found, error) {
+	if root.ID != "" {
+		for _, appliance := range appliances {
+			if appliance.ID == root.ID {
+				return appliance, nil
+			}
+		}
+
+		return homeconnect.Found{}, fmt.Errorf(
+			"%w: the appliance %s did not answer the search within %s; name its address with --host",
+			errNotFound, root.ID, root.Wait,
+		)
+	}
+
+	switch len(appliances) {
+	case 0:
+		return homeconnect.Found{}, fmt.Errorf(
+			"%w: no appliance answered the search within %s; name an address with --host", errNotFound, root.Wait,
+		)
+	case 1:
+		return appliances[0], nil
+	default:
+		ids := make([]string, 0, len(appliances))
+		for _, appliance := range appliances {
+			ids = append(ids, appliance.ID)
+		}
+
+		return homeconnect.Found{}, fmt.Errorf("%w: %d appliances answered the search, %s; name one with --id",
+			errUsage, len(appliances), strings.Join(ids, ", "))
+	}
 }
 
 // shown is a value an appliance announced, or a dash where it gave none.
@@ -105,7 +192,7 @@ func shown(value string) string {
 // Run finds the appliances that announce themselves on this network and
 // prints each: who it says it is, what it says it is, and where.
 func (cmd *discoverCommand) Run(ctx context.Context, root *rootCommand) error {
-	appliances, err := root.search(ctx)
+	appliances, err := root.search(ctx, nil)
 	if err != nil {
 		return err
 	}

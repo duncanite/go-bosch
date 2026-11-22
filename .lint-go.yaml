@@ -72,14 +72,25 @@ golangci:
       depguard:
         rules:
           main:
-            # What the command is built on: the house application toolkit,
-            # the CLI framework and the mDNS library, which the rule below
-            # keeps to the command. The library is the standard library
-            # alone.
+            # What the module is built on: the house application toolkit,
+            # the CLI framework and the mDNS library for the command, and
+            # the library that carries the WebSocket's frames; the rules
+            # below keep each of the last two to its place.
             allow:
               - github.com/mycophonic/primordium
               - github.com/alecthomas/kong
               - github.com/forkcloser/go-mdns
+              - github.com/gorilla/websocket
+          socket:
+            # The WebSocket library is named by package homeconnect and its
+            # test appliance and by nothing else: none of its types cross
+            # the library's API.
+            files:
+              - "!**/homeconnect/*.go"
+              - "!**/homeconnect/homeconnecttest/*.go"
+            deny:
+              - pkg: github.com/gorilla/websocket
+                desc: speak to an appliance through this module's homeconnect package
           search:
             # mDNS is the command's: its port is one to a host and belongs
             # to the program. The library says what an appliance is on the

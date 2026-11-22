@@ -1,5 +1,5 @@
-// homeconnect finds BSH Home Connect appliances on the LAN; the command is
-// internal/cli.
+// homeconnect finds BSH Home Connect appliances on the LAN and speaks to
+// one; the command is internal/cli.
 package main
 
 import (
@@ -14,7 +14,7 @@ import (
 
 func main() {
 	app.Main(&app.Options{Name: "homeconnect"}, func(ctx context.Context) error {
-		env := cli.Environment{Args: os.Args[1:], Out: os.Stdout, Err: os.Stderr}
+		env := cli.Environment{Args: os.Args[1:], Out: os.Stdout, Err: os.Stderr, Getenv: os.Getenv}
 
 		if code := cli.Run(ctx, env); code != cli.ExitOK {
 			return shutdown.ExitError(code)
