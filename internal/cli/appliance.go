@@ -12,11 +12,16 @@ import (
 	"time"
 
 	"github.com/duncanite/go-bosch/homeconnect"
+	"github.com/duncanite/go-bosch/homeconnect/profile"
 	"github.com/duncanite/go-bosch/internal/terminal"
 )
 
-// The resource an appliance gives all the values it holds at.
-const resourceValues = "/ro/allMandatoryValues"
+// The resources an appliance gives all the values it holds at, and tells
+// of the ones that change under.
+const (
+	resourceValues  = "/ro/allMandatoryValues"
+	resourceChanged = "/ro/values"
+)
 
 // shownOfItself is what info prints of an appliance, in this order, by
 // the keys the appliance writes them under: what names its make and its
@@ -95,6 +100,11 @@ func (*servicesCommand) Run(ctx context.Context, root *rootCommand) error {
 // Run prints the values the appliance holds: each under its numeric id,
 // as the appliance wrote it. What the ids mean is its profile's to say.
 func (*valuesCommand) Run(ctx context.Context, root *rootCommand) error {
+	read, err := root.described()
+	if err != nil {
+		return err
+	}
+
 	return root.with(ctx, func(ctx context.Context, session *homeconnect.Session) error {
 		answer, err := session.Get(ctx, resourceValues, nil)
 		if err != nil {
@@ -109,20 +119,43 @@ func (*valuesCommand) Run(ctx context.Context, root *rootCommand) error {
 			return nil
 		}
 
-		table := tabwriter.NewWriter(root.out, 0, 0, 2, ' ', 0)
-
-		terminal.Printf(table, "UID\tVALUE\n")
-
-		for _, one := range held {
-			terminal.Printf(table, "%s\t%s\n", one.UID.String(), oneLine(one.Value))
-		}
-
-		if err = table.Flush(); err != nil {
-			return fmt.Errorf("writing the values: %w", err)
-		}
-
-		return nil
+		return root.tabled(read, held)
 	})
+}
+
+// tabled prints the values an appliance holds: under a profile, each with
+// the name it gives the id, and as the member it is.
+func (root *rootCommand) tabled(read *profile.Profile, held []holding) error {
+	table := tabwriter.NewWriter(root.out, 0, 0, 2, ' ', 0)
+
+	if read == nil {
+		terminal.Printf(table, "UID\tVALUE\n")
+	} else {
+		terminal.Printf(table, "UID\tNAME\tVALUE\n")
+	}
+
+	for _, one := range held {
+		uid := one.UID.String()
+
+		if read == nil {
+			terminal.Printf(table, "%s\t%s\n", uid, oneLine(one.Value))
+
+			continue
+		}
+
+		name := named(read, uid)
+		if name == uid {
+			name = "-"
+		}
+
+		terminal.Printf(table, "%s\t%s\t%s\n", uid, name, said(read, uid, one.Value))
+	}
+
+	if err := table.Flush(); err != nil {
+		return fmt.Errorf("writing the values: %w", err)
+	}
+
+	return nil
 }
 
 // holding is one value an appliance holds, under its numeric id.
@@ -168,6 +201,11 @@ func oneLine(value json.RawMessage) string {
 // the time, what it is about, and what it carries. It ends when the
 // command is interrupted, which is no failure, or when the session does.
 func (*watchCommand) Run(ctx context.Context, root *rootCommand) error {
+	read, err := root.described()
+	if err != nil {
+		return err
+	}
+
 	// The search and the handshake are within the timeout; the watch is
 	// not.
 	opening, cancel := context.WithTimeout(ctx, root.Timeout)
@@ -194,20 +232,36 @@ func (*watchCommand) Run(ctx context.Context, root *rootCommand) error {
 		case err != nil:
 			return err
 		default:
-			lead := fmt.Sprintf(
-				"%s  %s %s  ",
-				time.Now().Format(time.TimeOnly),
-				message.Action,
-				terminal.Text(message.Resource),
-			)
-
-			if message.Data == nil {
-				terminal.Printf(root.out, "%s\n", strings.TrimRight(lead, " "))
-			} else {
-				root.written(lead, message.Data, false)
-			}
+			root.told(read, message)
 		}
 	}
+}
+
+// told prints one thing the appliance said. Values, under a profile, are
+// printed one a line, each by its name and as the member it is; anything
+// else, and everything with no profile, on one line as it came.
+func (root *rootCommand) told(read *profile.Profile, message homeconnect.Message) {
+	now := time.Now().Format(time.TimeOnly)
+
+	if held, listed := holdings(message.Data); read != nil && listed && message.Resource == resourceChanged {
+		for _, one := range held {
+			uid := one.UID.String()
+
+			terminal.Printf(root.out, "%s  %s = %s\n", now, named(read, uid), said(read, uid, one.Value))
+		}
+
+		return
+	}
+
+	lead := fmt.Sprintf("%s  %s %s  ", now, message.Action, terminal.Text(message.Resource))
+
+	if message.Data == nil {
+		terminal.Printf(root.out, "%s\n", strings.TrimRight(lead, " "))
+
+		return
+	}
+
+	root.written(lead, message.Data, false)
 }
 
 // Run sends one request and prints the appliance's answer: what it

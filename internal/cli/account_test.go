@@ -109,6 +109,18 @@ func TestAccountRefusals(t *testing.T) {
 		t.Errorf("account with one key refused exits %d, saying %q and %q", status, out, errs)
 	}
 
+	// An appliance whose key the account does not have at all: the error
+	// is one line, and says which appliance.
+	api.Status("/api/appliance/v2/appliances/B-0002/encryption-information", 404)
+
+	_, errs, _ = signing(t, api, api.Browse)
+	if !strings.Contains(
+		errs,
+		"homeconnect: account: an appliance's key was not given: B-0002: the account answered with status 404\n",
+	) {
+		t.Errorf("account with one key the account has not says %q", errs)
+	}
+
 	for name, row := range map[string]struct {
 		answer func(string) string
 		want   string

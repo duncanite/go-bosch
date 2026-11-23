@@ -73,8 +73,9 @@ type rootCommand struct {
 	Host      string        `env:"HOMECONNECT_HOST"      help:"The appliance's address on the network; with none, the appliance is searched for."`
 	ID        string        `env:"HOMECONNECT_ID"        help:"The id of the appliance to speak to, as discover prints it, when several announce themselves."`
 	Interface string        `env:"HOMECONNECT_INTERFACE" help:"The network interface the appliances are on, when the host has several."`
-	Wait      time.Duration `default:"3s"                env:"HOMECONNECT_WAIT"                                                                               help:"How long a search waits for appliances to answer."`
+	Wait      time.Duration `default:"3s"                env:"HOMECONNECT_WAIT"                                                                                                        help:"How long a search waits for appliances to answer."`
 	Timeout   time.Duration `default:"15s"               help:"How long to wait for the appliance, its search included, for every command but watch."`
+	Profile   string        `env:"HOMECONNECT_PROFILE"   help:"The appliance's profile, the archive account --profiles wrote: with it, values and watch name what the appliance says."`
 
 	Discover discoverCommand `cmd:"" help:"Print the appliances that announce themselves on this network. Needs no key."`
 	Account  accountCommand  `cmd:"" help:"Fetch from the Home Connect account what opens each of its appliances: the key and the initial vector. Needs a browser to sign in with."`
@@ -83,6 +84,7 @@ type rootCommand struct {
 	Values   valuesCommand   `cmd:"" help:"Print the values the appliance holds, each under its numeric id."`
 	Watch    watchCommand    `cmd:"" help:"Print what the appliance says as it says it, until interrupted."`
 	Call     callCommand     `cmd:"" help:"Send any request and print the appliance's answer."`
+	Features featuresCommand `cmd:"" help:"Print what the profile says the appliance has: each feature's id, kind, access and name. Needs --profile, and no key."`
 
 	in      io.Reader
 	out     io.Writer
@@ -98,9 +100,11 @@ type (
 		Whole bool `help:"Print, under each appliance, the host it names and every entry of what it announces."`
 	}
 	accountCommand struct {
-		Region string `env:"HOMECONNECT_REGION" help:"Where the account is kept: eu, na or cn."`
+		Region   string `env:"HOMECONNECT_REGION"                                                                      help:"Where the account is kept: eu, na or cn."`
+		Profiles string `help:"A directory to write each appliance's profile into, as <id>.zip: what --profile reads."`
 	}
-	infoCommand struct {
+	featuresCommand struct{}
+	infoCommand     struct {
 		Whole bool `help:"Print all the appliance said of itself, in JSON: its serial and its hardware address among it."`
 	}
 	servicesCommand struct{}
@@ -159,9 +163,9 @@ func Run(ctx context.Context, env Environment) (status int) {
 		return ExitError
 	}
 
-	// What is on the network is anyone's to hear, and the account is asked
-	// for the key: neither asks for one.
-	if command := kctx.Command(); command != "discover" && command != "account" {
+	// What is on the network is anyone's to hear, the account is asked for
+	// the key, and a profile is a file: none of them asks for a key.
+	if command := kctx.Command(); command != "discover" && command != "account" && command != "features" {
 		err = root.unlock()
 	}
 
@@ -170,7 +174,11 @@ func Run(ctx context.Context, env Environment) (status int) {
 	}
 
 	if err != nil {
-		terminal.Printf(env.Err, "homeconnect: %s\n", err)
+		// An error that joins several says each on a line of its own:
+		// each is printed as a line of the command's.
+		for line := range strings.SplitSeq(err.Error(), "\n") {
+			terminal.Printf(env.Err, "homeconnect: %s\n", line)
+		}
 
 		return ExitError
 	}

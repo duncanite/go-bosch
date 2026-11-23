@@ -16,10 +16,12 @@ The command, run from the appliances' network:
 just homeconnect discover          # the appliances that announce themselves, and where
 just homeconnect discover --whole  # all each one announces
 
-just homeconnect account --region na   # eu, na or cn: sign in, and get each appliance's key and initial vector
+just homeconnect account --region na --profiles ~/.config/homeconnect   # eu, na or cn: sign in; prints each appliance's key and initial vector, writes its profile
 export HOMECONNECT_KEY=... HOMECONNECT_IV=...   # what account printed for the appliance
+export HOMECONNECT_PROFILE=~/.config/homeconnect/<id>.zip   # what account wrote for it: names its values
 just homeconnect info              # its brand, its model, its versions
-just homeconnect values            # what it holds, each value under its numeric id
+just homeconnect features          # what the profile says it has
+just homeconnect values            # what it holds, each value by its name
 just homeconnect watch             # what it says as it changes, until interrupted
 just homeconnect call get /ro/allMandatoryValues   # anything else, as the appliance answers it
 ```
