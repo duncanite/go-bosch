@@ -98,6 +98,11 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
     and a `Session` asks (`Get`, `Post`), tells (`Notify`) and hears (`Next`), with
     `Services`, `Identity`, `Close`, `Done` and `Err`. A refusal is a `RefusedError`
     with the appliance's code.
+- `homeconnect/account`: what opens each appliance, from the owner's Home Connect
+  account. `Begin` makes a login, an address the owner opens in a browser; `Finish`
+  ends it with the address the browser was sent to; `Appliances` lists the account's
+  appliances, each with its key and, for the AES mode, its initial vector.
+  `accounttest` is the account's API for tests. Standard library only.
 - `homeconnect/homeconnecttest`: an appliance for tests. The WebSocket of the AES mode
   on a loopback port, under a key made for tests, which opens sessions, answers the
   handshake, holds values and tells of their changes, and on demand refuses, stalls,
@@ -106,8 +111,8 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
   library and by the test appliance.
 - `cmd/homeconnect` and `internal/cli`: the command, kong under primordium's process
   setup, with the Multicast DNS appliances are searched for over. `discover` prints the
-  appliances that announce themselves. Under the appliance's key, read from the
-  environment: `info`, what it says of itself; `services`; `values`, what it holds,
+  appliances that announce themselves, and `account` fetches the keys. Under the
+  appliance's key, read from the environment: `info`, what it says of itself; `services`; `values`, what it holds,
   each under its numeric id; `watch`, what it says as it changes; and `call`, any
   request.
 - `internal/terminal`: every line the command prints goes through it, so that what an
@@ -177,6 +182,24 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
 - **The key is the environment's.** The command reads `HOMECONNECT_KEY` and
   `HOMECONNECT_IV` and takes a key no other way; a `Key` prints as redacted under fmt
   and slog, and refuses to be marshalled.
+- **The key is fetched as the app fetches it.** BSH gives a key to its own app and to
+  nothing else, so the account is asked under the app's client id, the same for
+  everyone, as [hcpy's login](https://github.com/hcpy2-0/hcpy/blob/590f1e71a75c91b36ea77eab7b5698c42ace4451/hc-login.py)
+  and the [profile downloader](https://github.com/bruestel/homeconnect-profile-downloader/blob/bd05ae35bc661182ea17b08a2f3a3b90a7f51f71/main.js)
+  do: an authorization-code login with a proof key, the least scope that reads the
+  account, then the list of appliances and each one's encryption information.
+- **The owner signs in, in their own browser.** The login page carries a CAPTCHA, and a
+  password is no command's to hold. The login ends on an address of the app's own,
+  `hcauth://`, which no browser opens: the owner copies it from the browser's network
+  tab and pastes it to the command. That step is clumsy and is all there is, short of
+  embedding a browser. The address pasted is checked against the login it belongs to
+  before the account is asked.
+- **A region is said, not guessed.** An account is kept in Europe, North America or
+  China, each with its own addresses; `account` asks for `--region` and tries no other.
+- **One appliance's key refused does not hide the others.** They are returned, and
+  printed, with an error that names the one left out.
+- **What `account` prints is a secret**, the last two columns of each line: it goes to
+  the terminal it was asked from, and from there to the environment.
 - **`info` shows the make, not the appliance.** Its brand, model and versions; the
   serial and the hardware address an appliance also gives come only with `--whole`.
 - **Among several appliances the command chooses none.** A key is one appliance's:
@@ -185,11 +208,10 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
 
 ### Next
 
-1. The profile: the descriptions that name each numeric id, so that `values` and
-   `watch` say what a value is.
-2. Fetching the key and the profile from the account.
-3. Setting a value, selecting and starting a program.
-4. The TLS mode, when an appliance needs it: pre-shared-key TLS, which Go's standard
+1. The profile: the descriptions that name each numeric id, which the account also
+   gives, so that `values` and `watch` say what a value is.
+2. Setting a value, selecting and starting a program.
+3. The TLS mode, when an appliance needs it: pre-shared-key TLS, which Go's standard
    library does not have.
 
 ## Observed on an appliance
@@ -235,6 +257,18 @@ gives for it:
 - Of three commands that searched for it, each for three seconds, one did not hear it;
   named by its address it answered at once.
 
+The key had come, the same day, from the `account` command, run once against the
+owner's account in North America:
+
+- The owner signed in, in a browser, at the address the command printed. The browser
+  was last sent to `/security/oauth/redirect_target` on the login's own host, with a
+  code and a state that are that host's and not this login's; the answer to that
+  request redirects to the `hcauth://` address, in its `Location` header, and the
+  browser says only that it did not go there. The address to copy is that header's.
+- Pasted to the command, it was taken: the account gave a token, and its list held one
+  appliance, the dishwasher, of the AES mode, with a key and an initial vector.
+- That key opened the dishwasher.
+
 ## Open questions
 
 - Whether the dishwasher's profile names the AES mode, as its announcement and its ports
@@ -248,6 +282,9 @@ gives for it:
   refusal by a real appliance, a session kept for longer than a minute and its pings,
   and what an appliance of version 1 or 3 of a service wants were run against this
   module's test appliance only, which was written from the same notes as the client.
+- Of the account's API: an account in Europe or in China, an appliance of the TLS mode,
+  an account with several appliances, and every refusal were run against this module's
+  stand-in only, written from the two implementations named above.
 - What an appliance answers a wrong key with: here, its first frame fails to
   authenticate. Whether a real one sends that frame at all is not known.
 - What each numeric id means: the profile says, and it is not read yet.

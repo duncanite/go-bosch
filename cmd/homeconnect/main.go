@@ -14,7 +14,7 @@ import (
 
 func main() {
 	app.Main(&app.Options{Name: "homeconnect"}, func(ctx context.Context) error {
-		env := cli.Environment{Args: os.Args[1:], Out: os.Stdout, Err: os.Stderr, Getenv: os.Getenv}
+		env := cli.Environment{Args: os.Args[1:], In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Getenv: os.Getenv}
 
 		if code := cli.Run(ctx, env); code != cli.ExitOK {
 			return shutdown.ExitError(code)

@@ -20,6 +20,7 @@ import (
 	"github.com/forkcloser/go-mdns/transport"
 
 	"github.com/duncanite/go-bosch/homeconnect"
+	"github.com/duncanite/go-bosch/homeconnect/account"
 	"github.com/duncanite/go-bosch/internal/terminal"
 )
 
@@ -56,8 +57,14 @@ type Environment struct {
 	// Out and Err are where it writes.
 	Out io.Writer
 	Err io.Writer
+	// In is where it reads what is pasted: the address a login ends on.
+	In io.Reader
 	// Getenv reads the environment, where the appliance's key is.
 	Getenv func(string) string
+	// Account is where the Home Connect account's API is, and what
+	// reaches it; the zero value is BSH's own, in the region the command
+	// is told.
+	Account account.Options
 	// Network is where appliances are searched for; nil is the host's own.
 	Network transport.Network
 }
@@ -70,21 +77,28 @@ type rootCommand struct {
 	Timeout   time.Duration `default:"15s"               help:"How long to wait for the appliance, its search included, for every command but watch."`
 
 	Discover discoverCommand `cmd:"" help:"Print the appliances that announce themselves on this network. Needs no key."`
+	Account  accountCommand  `cmd:"" help:"Fetch from the Home Connect account what opens each of its appliances: the key and the initial vector. Needs a browser to sign in with."`
 	Info     infoCommand     `cmd:"" help:"Print what the appliance says of itself: its brand, its model, its versions."`
 	Services servicesCommand `cmd:"" help:"Print the services the appliance has, each with its version."`
 	Values   valuesCommand   `cmd:"" help:"Print the values the appliance holds, each under its numeric id."`
 	Watch    watchCommand    `cmd:"" help:"Print what the appliance says as it says it, until interrupted."`
 	Call     callCommand     `cmd:"" help:"Send any request and print the appliance's answer."`
 
+	in      io.Reader
 	out     io.Writer
+	err     io.Writer
 	getenv  func(string) string
 	network transport.Network
+	api     account.Options
 	key     homeconnect.Key
 }
 
 type (
 	discoverCommand struct {
 		Whole bool `help:"Print, under each appliance, the host it names and every entry of what it announces."`
+	}
+	accountCommand struct {
+		Region string `env:"HOMECONNECT_REGION" help:"Where the account is kept: eu, na or cn."`
 	}
 	infoCommand struct {
 		Whole bool `help:"Print all the appliance said of itself, in JSON: its serial and its hardware address among it."`
@@ -112,7 +126,9 @@ func Run(ctx context.Context, env Environment) (status int) {
 		}
 	}()
 
-	root := rootCommand{out: env.Out, getenv: env.Getenv, network: env.Network}
+	root := rootCommand{
+		in: env.In, out: env.Out, err: env.Err, getenv: env.Getenv, network: env.Network, api: env.Account,
+	}
 	if root.getenv == nil {
 		root.getenv = func(string) string { return "" }
 	}
@@ -123,7 +139,7 @@ func Run(ctx context.Context, env Environment) (status int) {
 		kong.Description(
 			"Find the BSH Home Connect appliances on the LAN, Bosch, Thermador, Siemens, Gaggenau, and speak to one. "+
 				"The appliance's key is read from "+EnvKey+" and its initial vector from "+EnvVector+
-				": the two its profile gives, from the owner's Home Connect account.",
+				": the two the account command prints, from the owner's Home Connect account.",
 		),
 		kong.UsageOnError(),
 		kong.Writers(env.Out, env.Err),
@@ -143,8 +159,9 @@ func Run(ctx context.Context, env Environment) (status int) {
 		return ExitError
 	}
 
-	// What is on the network is anyone's to hear: it asks for no key.
-	if kctx.Command() != "discover" {
+	// What is on the network is anyone's to hear, and the account is asked
+	// for the key: neither asks for one.
+	if command := kctx.Command(); command != "discover" && command != "account" {
 		err = root.unlock()
 	}
 
