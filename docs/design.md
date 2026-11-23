@@ -1,9 +1,9 @@
 # go-bosch: the design
 
 Research into BSH Home Connect appliances (Bosch, Thermador, Siemens, Gaggenau), a
-Thermador dishwasher in view, done on 2026-11-15 from public sources, to decide what a Go
-module for them would be. Nothing is built and nothing here was run against an appliance.
-The decisions at the end are open.
+Thermador dishwasher in view, done on 2026-11-15 from public sources, and the module it
+led to. So far the module finds appliances on the network, which was run against one
+dishwasher; the protocol itself was not.
 
 In short: a Home Connect appliance serves a WebSocket on the LAN, and with the keys of
 its own profile a client can read and drive it there with no cloud at run time. The keys
@@ -38,6 +38,10 @@ public implementation:
 - Read: the operation state, the door, the remaining time, errors, each under a numeric
   id that the profile's feature description names. Do: set a value, run a command, select
   and start a program; starting is where appliances differ most.
+- An appliance announces itself over DNS-SD as `_homeconnect._tcp`, with a TXT record
+  that carries its Home Connect id (`id`), its brand, its kind (`type`) and its model as
+  BSH abbreviates it (`vib`): what the Home Assistant integration
+  [reads to find one](https://github.com/chris-mc1/homeconnect_local_hass/blob/baa64d14a53c5e4777512117790b81d272361858/custom_components/homeconnect_ws/config_flow.py).
 - The pre-shared key (and for AES an initial vector), with the feature descriptions, come
   from the account: [the profile downloader](https://github.com/bruestel/homeconnect-profile-downloader)
   or hcpy's own login fetch them once. That login is the account's, in a browser, with a
@@ -78,26 +82,82 @@ dishwasher or a Thermador with it.
 | Limits | none known | 1,000 requests a day |
 | Risk | a firmware update can change the protocol; the key download depends on a login that already gained a CAPTCHA | a cloud in the path |
 
-## What this module would be
+## What this module is
 
-Not decided. The options, most local first:
+A client of the appliance's own WebSocket, local at run time, built in steps. The cloud
+API is not taken: it puts BSH's cloud in the path of every reading, under a daily quota.
 
-1. **A client of the appliance's WebSocket**, taking a downloaded profile as
-   configuration. The AES mode first: the key derivation, the chained HMAC, the handshake,
-   the mapping of ids to names from the profile. The TLS mode is a second, larger piece,
-   since it needs pre-shared-key TLS that Go does not ship.
-2. **A client of the cloud API**, small and well documented, within its daily quota.
+### Shape
+
+- `homeconnect`: the library. So far, an appliance's announcement: `Recognize` says
+  whether an instance of `_homeconnect._tcp` is an appliance's and which, and `Find` is
+  the search, through a `Browser` the caller lends. Standard library only.
+- `cmd/homeconnect` and `internal/cli`: the command, kong under primordium's process
+  setup, with the Multicast DNS appliances are searched for over. `discover` prints the
+  appliances that announce themselves; `discover --whole` prints all each one announces.
+- `internal/terminal`: every line the command prints goes through it, so that what an
+  appliance wrote is shown and never obeyed.
+
+### Decisions
+
+- **Finding an appliance needs a means this module does not have, and does not take.** A
+  host has one Multicast DNS responder, and it belongs to the program, not to a library.
+  `Recognize` is the knowledge, with no socket; `Find` is the search, through a `Browser`
+  declared here in this module's own terms, which names no Multicast DNS library. The
+  command has the program's, [go-mdns](https://github.com/forkcloser/go-mdns), and a
+  lint rule keeps it to `internal/cli`.
+- **An appliance is its Home Connect id.** It is what the announcement carries and what a
+  profile names the appliance by. An instance of the service with no id is not taken for
+  an appliance.
+- **An announcement is a claim.** Anyone on the network can announce an id at an address
+  of their choosing. What opens an appliance is the key of its profile, which is not on
+  the network.
+- **The announced port is kept as announced.** The two modes listen on two ports, 80 and
+  443, and what an appliance announces may say which it speaks: not known until one is
+  seen, so `Found` gives each address with the port that came with it, and nothing is
+  read into it yet.
+- **Discovery first.** What the dishwasher in view announces, its port above all, says
+  which of the two modes the rest has to speak, and so what is built next.
+
+### Next
+
+1. The wire: the session, the messages and the handshake, with the AES mode's
+   encryption, which is plain Go.
+2. The TLS mode, if the appliance in view needs it: pre-shared-key TLS, which Go's
+   standard library does not have.
+3. The profile: the key, and the descriptions that name each numeric id.
+4. Fetching the profile from the account.
+
+## Observed on an appliance
+
+On 2026-11-22 the command's `discover --whole` was run on a network with one Home
+Connect appliance, a Thermador dishwasher, and heard it within its wait:
+
+- It announces one instance of `_homeconnect._tcp`, at one IPv4 address and port 80.
+- Its TXT record has eight entries: `id`, `brand`, `type` and `vib`, as the Home
+  Assistant integration reads them; and `info`, the kind again in capitals; `mac`, twelve
+  hexadecimal digits; `txtvers`, 2; and `vers`, `1.0-2.17.1.13549`.
+- Its `id` is its brand, its `vib` and its `mac`, joined by dashes, and `vib` is the
+  model its owner had given, `DWHD650WFM`. Its host's name is its `id`, then `.local`.
+
+Port 80 is where the AES mode listens, and a host named by the id alone is what the
+notes of go-homeconnect2mqtt give as an AES appliance's default host, where a TLS one's
+has the brand and the kind before the id. So this dishwasher looks to speak AES, the
+mode Go's standard library can speak. An announcement does not prove it: the profile's
+`connectionType` says which, and so does the port that answers.
 
 ## Open questions
 
-- Which mode the dishwasher's profile names, AES or TLS. It decides the effort.
+- Which mode the dishwasher speaks, AES or TLS: its announcement points to AES, see
+  [Observed on an appliance](#observed-on-an-appliance). It decides the effort.
 - Whether the command should start a cycle, or reading the state is enough: starting
   meets the remote-start button each time.
-- The dishwasher's model number.
 
 ## Not verified
 
-- Nothing above was observed on an appliance.
+- Nothing of the protocol itself was observed on an appliance: an announcement was, and
+  nothing past it.
+- What an appliance in the TLS mode announces, its port above all.
 - No report of a Thermador dishwasher on the local protocol was found; reports for
   Thermador ovens, hoods and refrigerators were, through the Home Assistant integration
   [homeconnect_local_hass](https://github.com/chris-mc1/homeconnect_local_hass).
