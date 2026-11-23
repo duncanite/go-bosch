@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/alecthomas/kong v1.17.0
 	github.com/forkcloser/go-mdns v0.0.0-20261116031615-ee1ffba2ede5
+	github.com/gorilla/websocket v1.5.3
 	github.com/mycophonic/primordium v0.15.1
 )
 

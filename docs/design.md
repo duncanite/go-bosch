@@ -2,8 +2,8 @@
 
 Research into BSH Home Connect appliances (Bosch, Thermador, Siemens, Gaggenau), a
 Thermador dishwasher in view, done on 2026-11-15 from public sources, and the module it
-led to. So far the module finds appliances on the network, which was run against one
-dishwasher; the protocol itself was not.
+led to. The module finds appliances on the network and speaks the AES mode of the
+protocol, and both were run against one dishwasher.
 
 In short: a Home Connect appliance serves a WebSocket on the LAN, and with the keys of
 its own profile a client can read and drive it there with no cloud at run time. The keys
@@ -89,12 +89,27 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
 
 ### Shape
 
-- `homeconnect`: the library. So far, an appliance's announcement: `Recognize` says
-  whether an instance of `_homeconnect._tcp` is an appliance's and which, and `Find` is
-  the search, through a `Browser` the caller lends. Standard library only.
+- `homeconnect`: the library.
+  - An appliance's announcement: `Recognize` says whether an instance of
+    `_homeconnect._tcp` is an appliance's and which, and `Find` is the search, through
+    a `Browser` the caller lends.
+  - A session with an appliance of the AES mode: `ParseKey` reads the key and the
+    initial vector of its profile, `Dial` opens the WebSocket and does the handshake,
+    and a `Session` asks (`Get`, `Post`), tells (`Notify`) and hears (`Next`), with
+    `Services`, `Identity`, `Close`, `Done` and `Err`. A refusal is a `RefusedError`
+    with the appliance's code.
+- `homeconnect/homeconnecttest`: an appliance for tests. The WebSocket of the AES mode
+  on a loopback port, under a key made for tests, which opens sessions, answers the
+  handshake, holds values and tells of their changes, and on demand refuses, stalls,
+  hangs up, sends a frame out of the chain or goes deaf.
+- `internal/aeschain`: the AES mode's encryption, one chain a direction, used by the
+  library and by the test appliance.
 - `cmd/homeconnect` and `internal/cli`: the command, kong under primordium's process
   setup, with the Multicast DNS appliances are searched for over. `discover` prints the
-  appliances that announce themselves; `discover --whole` prints all each one announces.
+  appliances that announce themselves. Under the appliance's key, read from the
+  environment: `info`, what it says of itself; `services`; `values`, what it holds,
+  each under its numeric id; `watch`, what it says as it changes; and `call`, any
+  request.
 - `internal/terminal`: every line the command prints goes through it, so that what an
   appliance wrote is shown and never obeyed.
 
@@ -118,15 +133,64 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
   read into it yet.
 - **Discovery first.** What the dishwasher in view announces, its port above all, says
   which of the two modes the rest has to speak, and so what is built next.
+- **The AES mode, and not the TLS one.** The dishwasher in view speaks AES, which the
+  standard library covers. A key with no initial vector is an appliance's of the TLS
+  mode, and `Dial` says it is not supported: nothing here needs pre-shared-key TLS yet.
+- **The encryption is a chain, and a chain cannot lose a frame.** Every message of a
+  direction is one stream of AES-CBC, and each frame's tag covers the tag before it:
+  a frame opens only after the one before it, so one that never comes leaves every
+  later one unreadable. A frame that does not authenticate moves nothing, and the one
+  that belongs in its place would still open; but a client cannot tell a frame altered
+  from one foreign or one come in the place of a missing one, so the first that fails
+  ends the session. The reference implementation reads on, and after a missing frame
+  floods with failures. The first frame of a session that does not authenticate is the
+  key's doing, and is said as `ErrKey`; a later one is a session lost. For the same
+  reason nothing is sealed, and no id taken, for a request whose context has already
+  ended: a frame sealed and not sent is a frame the appliance never gets. A write that
+  fails ends the session.
+- **The key proves who speaks, not when.** A key and its vector never change, and every
+  connection starts its chain from them: whoever recorded a session on the network can
+  play the appliance's side of it again to a client, which would take old readings for
+  new. It is the protocol's own, and nothing a client does closes it.
+- **A request its caller gave up on is forgotten.** Its answer, should it come, goes to
+  `Next` as any message that answers nothing waited for; nothing is kept for it.
+- **Checked against OpenSSL.** The test of `internal/aeschain` opens two frames made
+  with OpenSSL's AES-256-CBC and HMAC-SHA256 and none of this module's code: one stream
+  across both, each tag over the one before, the second message of the length whose
+  padding takes a block of its own.
+- **What is said and not asked for is kept, to a bound.** `Next` gives what the
+  appliance notifies of, in order. More than a thousand messages unread ends the
+  session as `ErrOverrun`: a message is not dropped without a word.
+- **A message that cannot be read ends nothing.** It authenticated, so the chain
+  stands; `Next` gives it whole, as an `UnreadError`, and the one after it next.
+- **A code that says all went well is no refusal.** The reference implementation takes
+  any code in an answer for an error; here an answer with a code from 200 to 299 is an
+  answer.
+- **The client names itself the same way every time**: a fixed name and id, unless a
+  `Dialer` gives others. An appliance keeps the clients it has seen, by id, and tells
+  the list at each connection: a client that named itself anew each time would add to
+  it without end. What a second connection under the same id does to the first is not
+  known.
+- **The WebSocket library is confined.** [gorilla/websocket](https://github.com/gorilla/websocket)
+  carries the frames, under a license the baseline accepts; a lint rule keeps it to
+  `homeconnect` and its test appliance, and none of its types cross the library's API.
+- **The key is the environment's.** The command reads `HOMECONNECT_KEY` and
+  `HOMECONNECT_IV` and takes a key no other way; a `Key` prints as redacted under fmt
+  and slog, and refuses to be marshalled.
+- **`info` shows the make, not the appliance.** Its brand, model and versions; the
+  serial and the hardware address an appliance also gives come only with `--whole`.
+- **Among several appliances the command chooses none.** A key is one appliance's:
+  with no `--host`, the one appliance on the network is spoken to, and among several
+  `--id` says which.
 
 ### Next
 
-1. The wire: the session, the messages and the handshake, with the AES mode's
-   encryption, which is plain Go.
-2. The TLS mode, if the appliance in view needs it: pre-shared-key TLS, which Go's
-   standard library does not have.
-3. The profile: the key, and the descriptions that name each numeric id.
-4. Fetching the profile from the account.
+1. The profile: the descriptions that name each numeric id, so that `values` and
+   `watch` say what a value is.
+2. Fetching the key and the profile from the account.
+3. Setting a value, selecting and starting a program.
+4. The TLS mode, when an appliance needs it: pre-shared-key TLS, which Go's standard
+   library does not have.
 
 ## Observed on an appliance
 
@@ -146,17 +210,47 @@ has the brand and the kind before the id. So this dishwasher looks to speak AES,
 mode Go's standard library can speak. An announcement does not prove it: the profile's
 `connectionType` says which, and so does the port that answers.
 
+The same day, a TCP connection to that address was taken at port 80 and refused at port
+443: the port of the AES mode answers, and the TLS mode's does not.
+
+Then the command was run against it, under the key and the initial vector its account
+gives for it:
+
+- It opened a session, and the handshake went through as it is written here. Its
+  services are `ci` 2, `ei` 2, `ni` 1 and `ro` 1: so it was sent a nonce, asked what it
+  is, told the client was ready and asked of its network, and it has no `iz`.
+- What it said of itself, to `/ci/info`: its brand, its `vib`, an `eNumber` that is the
+  `vib` with a slash and an index, `deviceInfo` and `deviceType`, its kind in two
+  spellings, `haVersion` 1.0, a `swVersion` that is the announcement's `vers` without
+  its first part, and a `hwVersion`.
+- `/ro/allMandatoryValues` answered with a hundred values, each a number, a truth value
+  or a string, under ids from 3 to 5135.
+- Under `watch` it first said, unasked, `/ci/registeredDevices`: the clients it knows,
+  each with a number, a kind, a name, an id and whether it is connected. Two were its
+  owner's, not connected; the third was this module, under its fixed name and id,
+  connected. So an appliance keeps the clients it has seen, by the id each gave.
+- Then, as something was done at the appliance, it told of single values changing in
+  `/ro/values`; then `/ro/descriptionChange`, some twenty ids each with a parent and an
+  access; then every value again, in several notifications of about thirty values each.
+- Of three commands that searched for it, each for three seconds, one did not hear it;
+  named by its address it answered at once.
+
 ## Open questions
 
-- Which mode the dishwasher speaks, AES or TLS: its announcement points to AES, see
-  [Observed on an appliance](#observed-on-an-appliance). It decides the effort.
+- Whether the dishwasher's profile names the AES mode, as its announcement and its ports
+  say: see [Observed on an appliance](#observed-on-an-appliance).
 - Whether the command should start a cycle, or reading the state is enough: starting
   meets the remote-start button each time.
 
 ## Not verified
 
-- Nothing of the protocol itself was observed on an appliance: an announcement was, and
-  nothing past it.
+- Beyond [Observed on an appliance](#observed-on-an-appliance): `call`, a `Post`, a
+  refusal by a real appliance, a session kept for longer than a minute and its pings,
+  and what an appliance of version 1 or 3 of a service wants were run against this
+  module's test appliance only, which was written from the same notes as the client.
+- What an appliance answers a wrong key with: here, its first frame fails to
+  authenticate. Whether a real one sends that frame at all is not known.
+- What each numeric id means: the profile says, and it is not read yet.
 - What an appliance in the TLS mode announces, its port above all.
 - No report of a Thermador dishwasher on the local protocol was found; reports for
   Thermador ovens, hoods and refrigerators were, through the Home Assistant integration
@@ -168,6 +262,10 @@ mode Go's standard library can speak. An announcement does not prove it: the pro
 
 - [go-homeconnect2mqtt](https://github.com/SukramJ/go-homeconnect2mqtt): the local
   protocol written out, and a Go implementation of it.
+- [homeconnect_websocket](https://github.com/chris-mc1/homeconnect_websocket/tree/42482e39ac24e9125c452622225aab9675d2e049/src/homeconnect_websocket):
+  the reference implementation, in Python, that the session, the handshake and the
+  encryption here follow (`session.py`, `message.py`, `hc_socket.py`), and
+  [go-homeconnect2mqtt's notes on it](https://github.com/SukramJ/go-homeconnect2mqtt/blob/38765e5f3bb56c4a6db25caf65fe2bbf992b8542/docs/01-protocol.md).
 - [hcpy](https://github.com/osresearch/hcpy) and its maintained fork
   [hcpy2-0/hcpy](https://github.com/hcpy2-0/hcpy): the first implementation, the cipher
   suite seen on a dishwasher, the login with a CAPTCHA.
