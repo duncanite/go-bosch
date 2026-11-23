@@ -5,6 +5,8 @@
 package homeconnecttest
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -49,7 +51,127 @@ const (
 	mandatory    = "/ro/allMandatoryValues"
 	descriptions = "/ro/allDescriptionChanges"
 	values       = "/ro/values"
+	started      = "/ro/activeProgram"
 )
+
+// The ids of the features the test appliance's profile describes: a
+// dishwasher's, under the names BSH gives them.
+const (
+	ActiveProgram   = 256
+	SelectedProgram = 257
+	Abort           = 512
+	RemoteStart     = 523
+	Door            = 527
+	Power           = 539
+	Progress        = 542
+	Remaining       = 544
+	Operation       = 552
+	Pause           = 560
+	Resume          = 561
+	Eco             = 8195
+	Auto            = 8196
+)
+
+// The test appliance's profile, as its two documents.
+const (
+	description = `<device>
+  <statusList access="read" uid="0001">
+    <status access="read" refCID="01" uid="020B"/>
+    <status access="read" enumerationType="0201" refCID="03" uid="020F"/>
+    <status access="read" enumerationType="0228" refCID="03" uid="0228"/>
+  </statusList>
+  <settingList access="readWrite" uid="0002">
+    <setting access="readWrite" enumerationType="0301" refCID="03" uid="021B"/>
+  </settingList>
+  <optionList access="read" uid="0003">
+    <option access="read" refCID="11" uid="021E"/>
+    <option access="read" refCID="10" uid="0220"/>
+  </optionList>
+  <commandList access="writeOnly" uid="0004">
+    <command access="writeOnly" refCID="01" uid="0200"/>
+    <command access="writeOnly" refCID="01" uid="0230"/>
+    <command access="writeOnly" refCID="01" uid="0231"/>
+  </commandList>
+  <programGroup uid="0005">
+    <program execution="selectAndStart" uid="2003"/>
+    <program execution="selectAndStart" uid="2004"/>
+  </programGroup>
+  <activeProgram access="readWrite" uid="0100"/>
+  <selectedProgram access="readWrite" uid="0101"/>
+  <enumerationTypeList>
+    <enumerationType enid="0301" subsetOf="0300"><enumeration value="1"/><enumeration value="2"/></enumerationType>
+  </enumerationTypeList>
+</device>`
+
+	mapping = `<featureMappingFile>
+  <featureDescription>
+    <feature refUID="020B">BSH.Common.Status.RemoteControlStartAllowed</feature>
+    <feature refUID="020F">BSH.Common.Status.DoorState</feature>
+    <feature refUID="0228">BSH.Common.Status.OperationState</feature>
+    <feature refUID="021B">BSH.Common.Setting.PowerState</feature>
+    <feature refUID="021E">BSH.Common.Option.ProgramProgress</feature>
+    <feature refUID="0220">BSH.Common.Option.RemainingProgramTime</feature>
+    <feature refUID="0200">BSH.Common.Command.AbortProgram</feature>
+    <feature refUID="0230">BSH.Common.Command.PauseProgram</feature>
+    <feature refUID="0231">BSH.Common.Command.ResumeProgram</feature>
+    <feature refUID="2003">Dishcare.Dishwasher.Program.Eco50</feature>
+    <feature refUID="2004">Dishcare.Dishwasher.Program.Auto2</feature>
+    <feature refUID="0100">BSH.Common.Root.ActiveProgram</feature>
+    <feature refUID="0101">BSH.Common.Root.SelectedProgram</feature>
+  </featureDescription>
+  <enumDescriptionList>
+    <enumDescription refENID="0201" enumKey="DoorState">
+      <enumMember refValue="0">Open</enumMember>
+      <enumMember refValue="1">Closed</enumMember>
+      <enumMember refValue="2">Locked</enumMember>
+    </enumDescription>
+    <enumDescription refENID="0228" enumKey="OperationState">
+      <enumMember refValue="0">Inactive</enumMember>
+      <enumMember refValue="1">Ready</enumMember>
+      <enumMember refValue="2">DelayedStart</enumMember>
+      <enumMember refValue="3">Run</enumMember>
+      <enumMember refValue="4">Pause</enumMember>
+      <enumMember refValue="5">ActionRequired</enumMember>
+      <enumMember refValue="6">Finished</enumMember>
+      <enumMember refValue="7">Error</enumMember>
+      <enumMember refValue="8">Aborting</enumMember>
+    </enumDescription>
+    <enumDescription refENID="0300" enumKey="PowerState">
+      <enumMember refValue="1">BSH.Common.EnumType.PowerState.Off</enumMember>
+      <enumMember refValue="2">BSH.Common.EnumType.PowerState.On</enumMember>
+      <enumMember refValue="3">BSH.Common.EnumType.PowerState.Standby</enumMember>
+    </enumDescription>
+  </enumDescriptionList>
+</featureMappingFile>`
+)
+
+// Profile is the archive of the test appliance's profile, as an account
+// gives one: what package profile reads, and what names the ids above.
+func Profile() []byte {
+	var archive bytes.Buffer
+
+	writer := zip.NewWriter(&archive)
+
+	for _, file := range [][2]string{
+		{"TEST-DISHWASHER-000000000001_DeviceDescription.xml", description},
+		{"TEST-DISHWASHER-000000000001_FeatureMapping.xml", mapping},
+	} {
+		entry, err := writer.Create(file[0])
+		if err != nil {
+			panic(err)
+		}
+
+		if _, err = entry.Write([]byte(file[1])); err != nil {
+			panic(err)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		panic(err)
+	}
+
+	return archive.Bytes()
+}
 
 // client is one session with an Appliance.
 type client struct {
@@ -433,6 +555,7 @@ func (a *Appliance) answer(from *client, request homeconnect.Message) {
 
 		answer.Data = written(held)
 	case request.Resource == values && request.Action == homeconnect.Post:
+	case request.Resource == started && request.Action == homeconnect.Post:
 	default:
 		answer.Code = NotFound
 	}
@@ -445,9 +568,33 @@ func (a *Appliance) answer(from *client, request homeconnect.Message) {
 
 	from.say(written(answer))
 
-	if answer.Code == 0 && request.Resource == values && request.Action == homeconnect.Post {
-		a.take(request)
+	if answer.Code != 0 || request.Action != homeconnect.Post {
+		return
 	}
+
+	switch request.Resource {
+	case values:
+		a.take(request)
+	case started:
+		a.start(request)
+	}
+}
+
+// start runs the program a client asked for: the appliance says it is
+// the active one, and that it runs.
+func (a *Appliance) start(request homeconnect.Message) {
+	var asked []struct {
+		Program int `json:"program"`
+	}
+
+	if json.Unmarshal(request.Data, &asked) != nil || len(asked) == 0 {
+		return
+	}
+
+	const running = 3
+
+	a.Set(ActiveProgram, asked[0].Program)
+	a.Set(Operation, running)
 }
 
 // take holds the values a client sent, and tells every client of each.

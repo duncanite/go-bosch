@@ -93,6 +93,11 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
   - An appliance's announcement: `Recognize` says whether an instance of
     `_homeconnect._tcp` is an appliance's and which, and `Find` is the search, through
     a `Browser` the caller lends.
+  - An appliance spoken to under its profile: `Open` gives an `Appliance`, whose
+    `State` is what it is doing, its door, its power, the program selected and the one
+    running, the time left and how far it is, each unknown until said; `Next` gives the
+    state each time it changes; `Pause`, `Resume`, `Stop`, `Start` and `SetPower` drive
+    it.
   - A session with an appliance of the AES mode: `ParseKey` reads the key and the
     initial vector of its profile, `Dial` opens the WebSocket and does the handshake,
     and a `Session` asks (`Get`, `Post`), tells (`Notify`) and hears (`Next`), with
@@ -225,6 +230,37 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
   is a known kind is a feature; a list is none, nor is an option a program refers to.
   An enumeration the mapping does not name is a part of one it does. A value that is
   no member of its enumeration, as some firmware sends, is shown as it came.
+- **An `Appliance` is read by names, not by ids.** The ids differ by model, and the
+  names are BSH's own, the same on every appliance and in BSH's
+  [public documentation of its states](https://api-docs.home-connect.com/states/) and
+  [commands](https://api-docs.home-connect.com/commands/): the operation state, the door
+  state, the power state, the remaining time and the progress of a program, the active
+  and the selected program, pause and resume. An appliance is opened under its profile,
+  which says which id carries each name, and a feature the profile has not is a part
+  that stays unknown, or a command that is unsupported.
+- **Unknown is not zero.** Every part of a `State` is nil until the appliance has said
+  it, and nil again when it says it in a word this package has none for: a member of an
+  enumeration it does not know, a time left under zero. A reading is never a default.
+- **The operation state is a closed set of this package's own**, nine words for BSH's
+  nine members; the door three, the power three. A program is not a closed set: which
+  programs there are is the model's, so a `Program` is the appliance's id and the name
+  its profile gives it, BSH's own key, the same on every appliance with that program.
+- **`Next` gives the state when it changed, and at no other time.** What the appliance
+  says that changes nothing read here is passed over, a value said again as it was
+  among it. The state given is the whole, and the caller's own copy.
+- **A command returns when the appliance has taken it.** What the appliance then does
+  comes as a change like any other. `Start` sends the id of the program that is
+  selected and no option, and is `ErrNoProgram` when none is known to be; an appliance
+  starts from afar only when a person has allowed it at its panel, which `RemoteStart`
+  says, and refuses otherwise with its own code. `SetPower` turns off to "off" where
+  the profile has it and to standby where it has no other.
+- **Stopping a program is by a name BSH's documentation does not list.** The command is
+  `BSH.Common.Command.AbortProgram`, as the implementations of the local protocol name
+  it, and the dishwasher's profile has it. A profile need not have every command: that
+  dishwasher has no pause.
+- **The time left is the program's, running or not.** With no program running an
+  appliance still says a time, the selected program's: `Remaining` is given as said,
+  and `Operation` says whether anything runs.
 - **`info` shows the make, not the appliance.** Its brand, model and versions; the
   serial and the hardware address an appliance also gives come only with `--whole`.
 - **Among several appliances the command chooses none.** A key is one appliance's:
@@ -233,10 +269,8 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
 
 ### Next
 
-1. What a consumer needs of an appliance as values with types: its door, its state, its
-   remaining time, read from a session under a profile.
-2. Setting a value, selecting and starting a program.
-3. The TLS mode, when an appliance needs it: pre-shared-key TLS, which Go's standard
+1. Selecting a program, and its options.
+2. The TLS mode, when an appliance needs it: pre-shared-key TLS, which Go's standard
    library does not have.
 
 ## Observed on an appliance
@@ -309,6 +343,19 @@ and `values` under the profile it wrote:
   and were printed by name, the enumerated ones as their member; fifty-five are under
   ids the profile does not describe at all, and were printed by their id.
 
+Then `status` and `power` were run on it, under that profile:
+
+- `status` said what the dishwasher was doing in this module's words: inactive, its
+  door closed, its power off, a program selected by name and none running, a time left
+  of two hours and nine minutes with no program running, which is the selected
+  program's, a progress of 0, and remote start not allowed.
+- `power on` was taken, and `status` after it said ready and on; `power off` was taken.
+  So the appliance takes a setting written by the number of its member, as this module
+  sends one.
+- Its profile has `BSH.Common.Command.AbortProgram` and `ResumeProgram`, both with an
+  access of `none` while nothing runs, and no `PauseProgram`: on this dishwasher `Pause`
+  is unsupported.
+
 ## Open questions
 
 - Whether the dishwasher's profile names the AES mode, as its announcement and its ports
@@ -332,6 +379,13 @@ and `values` under the profile it wrote:
   does not name were read in documents made for the tests only.
 - What the fifty-five values the dishwasher holds under ids its profile does not
   describe are.
+- Against a real appliance: `Stop`, `Resume` and `Start`, which want a program running
+  or remote start allowed at the panel; `Next` and what it tells as the state changes;
+  and what the dishwasher is at after `power off`, which was sent and not read back.
+  Those were run against the test appliance only.
+- Whether a program started with no option sent runs with the options chosen at the
+  panel. The reference implementation sends every read-write option's value when the
+  description marks the program root as wanting the full set; `Start` sends none.
 - What an appliance in the TLS mode announces, its port above all.
 - No report of a Thermador dishwasher on the local protocol was found; reports for
   Thermador ovens, hoods and refrigerators were, through the Home Assistant integration

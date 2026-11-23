@@ -81,6 +81,12 @@ type rootCommand struct {
 	Account  accountCommand  `cmd:"" help:"Fetch from the Home Connect account what opens each of its appliances: the key and the initial vector. Needs a browser to sign in with."`
 	Info     infoCommand     `cmd:"" help:"Print what the appliance says of itself: its brand, its model, its versions."`
 	Services servicesCommand `cmd:"" help:"Print the services the appliance has, each with its version."`
+	Status   statusCommand   `cmd:"" help:"Print what the appliance is doing: its state, its door, its program and the time left. Needs --profile."`
+	Pause    pauseCommand    `cmd:"" help:"Hold the running program. Needs --profile, as every command that drives the appliance."`
+	Resume   resumeCommand   `cmd:"" help:"Go on with a paused program."`
+	Stop     stopCommand     `cmd:"" help:"End the running program."`
+	Start    startCommand    `cmd:"" help:"Start the selected program. The appliance wants remote start allowed at its own panel."`
+	Power    powerCommand    `cmd:"" help:"Turn the appliance on, or off."`
 	Values   valuesCommand   `cmd:"" help:"Print the values the appliance holds, each under its numeric id."`
 	Watch    watchCommand    `cmd:"" help:"Print what the appliance says as it says it, until interrupted."`
 	Call     callCommand     `cmd:"" help:"Send any request and print the appliance's answer."`
@@ -104,7 +110,15 @@ type (
 		Profiles string `help:"A directory to write each appliance's profile into, as <id>.zip: what --profile reads."`
 	}
 	featuresCommand struct{}
-	infoCommand     struct {
+	statusCommand   struct{}
+	pauseCommand    struct{}
+	resumeCommand   struct{}
+	stopCommand     struct{}
+	startCommand    struct{}
+	powerCommand    struct {
+		State string `arg:"" enum:"on,off" help:"on or off."`
+	}
+	infoCommand struct {
 		Whole bool `help:"Print all the appliance said of itself, in JSON: its serial and its hardware address among it."`
 	}
 	servicesCommand struct{}

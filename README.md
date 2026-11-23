@@ -21,6 +21,8 @@ export HOMECONNECT_KEY=... HOMECONNECT_IV=...   # what account printed for the a
 export HOMECONNECT_PROFILE=~/.config/homeconnect/<id>.zip   # what account wrote for it: names its values
 just homeconnect info              # its brand, its model, its versions
 just homeconnect features          # what the profile says it has
+just homeconnect status            # what it is doing: state, door, program, time left
+just homeconnect pause             # and resume, stop, start, power on, power off
 just homeconnect values            # what it holds, each value by its name
 just homeconnect watch             # what it says as it changes, until interrupted
 just homeconnect call get /ro/allMandatoryValues   # anything else, as the appliance answers it

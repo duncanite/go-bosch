@@ -101,13 +101,13 @@ func (root *rootCommand) search(ctx context.Context, enough func(homeconnect.Fou
 	return appliances, nil
 }
 
-// dial opens a session with the appliance at --host, or with none with
-// the appliance found on the network: the one --id names, or the only
-// one there is. Among several with none named it chooses none: the key
-// is one appliance's, and a key tried at another is refused.
-func (root *rootCommand) dial(ctx context.Context) (*homeconnect.Session, error) {
+// places is where to reach the appliance: --host, or with none the
+// addresses of the appliance found on the network, the one --id names or
+// the only one there is. Among several with none named it chooses none:
+// the key is one appliance's, and a key tried at another is refused.
+func (root *rootCommand) places(ctx context.Context) ([]string, error) {
 	if root.Host != "" {
-		return homeconnect.Dial(ctx, root.Host, root.key)
+		return []string{root.Host}, nil
 	}
 
 	var enough func(homeconnect.Found) bool
@@ -128,23 +128,56 @@ func (root *rootCommand) dial(ctx context.Context) (*homeconnect.Session, error)
 		return nil, err
 	}
 
-	failure := fmt.Errorf("%w: the appliance %s announces no address; name one with --host", errNotFound, chosen.ID)
+	if len(chosen.Addresses) == 0 {
+		return nil, fmt.Errorf(
+			"%w: the appliance %s announces no address; name one with --host",
+			errNotFound,
+			chosen.ID,
+		)
+	}
 
+	addresses := make([]string, 0, len(chosen.Addresses))
 	for _, address := range chosen.Addresses {
-		session, dialErr := homeconnect.Dial(ctx, address.String(), root.key)
-		if dialErr == nil {
-			return session, nil
+		addresses = append(addresses, address.String())
+	}
+
+	return addresses, nil
+}
+
+// reached is what opening the appliance gives, at the first of the places
+// it may be at that opens.
+func reached[T any](ctx context.Context, root *rootCommand, open func(address string) (*T, error)) (*T, error) {
+	addresses, err := root.places(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	failure := fmt.Errorf("%w: the appliance has no address to be reached at", errNotFound)
+
+	for _, address := range addresses {
+		opened, openErr := open(address)
+		if openErr == nil && opened != nil {
+			return opened, nil
 		}
 
-		failure = dialErr
+		if openErr != nil {
+			failure = openErr
+		}
 
 		// A key one address refused is refused at them all.
-		if errors.Is(dialErr, homeconnect.ErrKey) {
+		if errors.Is(openErr, homeconnect.ErrKey) {
 			break
 		}
 	}
 
 	return nil, failure
+}
+
+// dial opens a session with the appliance.
+func (root *rootCommand) dial(ctx context.Context) (*homeconnect.Session, error) {
+	return reached(ctx, root, func(address string) (*homeconnect.Session, error) {
+		return homeconnect.Dial(ctx, address, root.key)
+	})
 }
 
 // choose is the appliance to speak to, of those found.
