@@ -101,8 +101,13 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
 - `homeconnect/account`: what opens each appliance, from the owner's Home Connect
   account. `Begin` makes a login, an address the owner opens in a browser; `Finish`
   ends it with the address the browser was sent to; `Appliances` lists the account's
-  appliances, each with its key and, for the AES mode, its initial vector.
-  `accounttest` is the account's API for tests. Standard library only.
+  appliances, each with its key and, for the AES mode, its initial vector; `Profile`
+  gives the archive of an appliance's profile. `accounttest` is the account's API for
+  tests. Standard library only.
+- `homeconnect/profile`: what an appliance's profile says of its values. `FromArchive`
+  reads the archive the account gives, `Parse` its two documents; a `Profile` gives the
+  `Feature` an id stands for, with its name, its kind, its access and the names of what
+  an enumerated one may be, and the id a name stands for. Standard library only.
 - `homeconnect/homeconnecttest`: an appliance for tests. The WebSocket of the AES mode
   on a loopback port, under a key made for tests, which opens sessions, answers the
   handshake, holds values and tells of their changes, and on demand refuses, stalls,
@@ -111,8 +116,8 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
   library and by the test appliance.
 - `cmd/homeconnect` and `internal/cli`: the command, kong under primordium's process
   setup, with the Multicast DNS appliances are searched for over. `discover` prints the
-  appliances that announce themselves, and `account` fetches the keys. Under the
-  appliance's key, read from the environment: `info`, what it says of itself; `services`; `values`, what it holds,
+  appliances that announce themselves, `account` fetches the keys and the profiles, and
+  `features` prints a profile. Under the appliance's key, read from the environment: `info`, what it says of itself; `services`; `values`, what it holds,
   each under its numeric id; `watch`, what it says as it changes; and `call`, any
   request.
 - `internal/terminal`: every line the command prints goes through it, so that what an
@@ -200,6 +205,26 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
   printed, with an error that names the one left out.
 - **What `account` prints is a secret**, the last two columns of each line: it goes to
   the terminal it was asked from, and from there to the environment.
+- **A profile names what an appliance says; it opens nothing.** An appliance speaks in
+  numeric ids, and the two documents of its profile, a description of its structure
+  and a mapping of ids to names, say what each is. The account gives them in one
+  archive, with no key in it. `account --profiles` writes each appliance's archive
+  into a directory, under the appliance's id, and `--profile` names one: `values` and
+  `watch` then print each value by its name, and as the member it is when it is
+  enumerated; `features` prints what the profile holds, with no key and no appliance.
+- **The archive is kept as the account gave it.** It is read to know it is a profile
+  before it is written, and written byte for byte: nothing here re-encodes it, so
+  whatever reads it later reads the account's own. A library takes it as bytes; the
+  file is the command's.
+- **A profile is a stranger's text.** The archive and each document in it are read
+  within a bound, whatever length the archive claims; an appliance's id is a file's
+  name only when it is letters, digits, dots, dashes and underscores; and a name the
+  mapping gives is printed through `internal/terminal` like anything an appliance says.
+- **A description is walked, a mapping is decoded.** Features are nested in lists to any
+  depth, so the description is read element by element, and whatever carries an id and
+  is a known kind is a feature; a list is none, nor is an option a program refers to.
+  An enumeration the mapping does not name is a part of one it does. A value that is
+  no member of its enumeration, as some firmware sends, is shown as it came.
 - **`info` shows the make, not the appliance.** Its brand, model and versions; the
   serial and the hardware address an appliance also gives come only with `--whole`.
 - **Among several appliances the command chooses none.** A key is one appliance's:
@@ -208,8 +233,8 @@ API is not taken: it puts BSH's cloud in the path of every reading, under a dail
 
 ### Next
 
-1. The profile: the descriptions that name each numeric id, which the account also
-   gives, so that `values` and `watch` say what a value is.
+1. What a consumer needs of an appliance as values with types: its door, its state, its
+   remaining time, read from a session under a profile.
 2. Setting a value, selecting and starting a program.
 3. The TLS mode, when an appliance needs it: pre-shared-key TLS, which Go's standard
    library does not have.
@@ -269,6 +294,21 @@ owner's account in North America:
   appliance, the dishwasher, of the AES mode, with a key and an initial vector.
 - That key opened the dishwasher.
 
+Later that day `account --profiles` was run against the same account, and `features`
+and `values` under the profile it wrote:
+
+- The account gave the dishwasher's profile as one archive, which read as a profile and
+  was written under the appliance's id.
+- The profile describes sixty-three features, every one with a name: thirty-six under
+  `BSH.Common`, the rest under `Dishcare.Dishwasher`; commands, settings, statuses,
+  events, options and six programs. Their access is written in the words this module
+  compares in lower case, `read`, `readwrite`, `writeonly`, `readstatic` and `none`.
+- The members of its enumerations are written by their last word, `Closed`, `Off`,
+  `Inactive`, and not by the whole name BSH's public documentation gives them.
+- Of the hundred values the dishwasher holds, forty-five are features of its profile
+  and were printed by name, the enumerated ones as their member; fifty-five are under
+  ids the profile does not describe at all, and were printed by their id.
+
 ## Open questions
 
 - Whether the dishwasher's profile names the AES mode, as its announcement and its ports
@@ -287,7 +327,11 @@ owner's account in North America:
   stand-in only, written from the two implementations named above.
 - What an appliance answers a wrong key with: here, its first frame fails to
   authenticate. Whether a real one sends that frame at all is not known.
-- What each numeric id means: the profile says, and it is not read yet.
+- A profile other than one dishwasher's: an enumeration that is a part of another, a
+  profile whose members are written by their whole names, and a feature the mapping
+  does not name were read in documents made for the tests only.
+- What the fifty-five values the dishwasher holds under ids its profile does not
+  describe are.
 - What an appliance in the TLS mode announces, its port above all.
 - No report of a Thermador dishwasher on the local protocol was found; reports for
   Thermador ovens, hoods and refrigerators were, through the Home Assistant integration

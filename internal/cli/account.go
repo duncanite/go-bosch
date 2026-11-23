@@ -75,6 +75,19 @@ func (cmd *accountCommand) Run(ctx context.Context, root *rootCommand) error {
 		return nil
 	}
 
+	if err = root.listed(appliances); err != nil {
+		return err
+	}
+
+	if cmd.Profiles != "" {
+		unread = errors.Join(unread, root.save(ctx, client, session, appliances, cmd.Profiles))
+	}
+
+	return unread
+}
+
+// listed prints the account's appliances, each with what opens it.
+func (root *rootCommand) listed(appliances []account.Appliance) error {
 	table := tabwriter.NewWriter(root.out, 0, 0, 2, ' ', 0)
 
 	terminal.Printf(table, "ID\tBRAND\tTYPE\tMODEL\tMODE\tKEY\tIV\n")
@@ -84,11 +97,11 @@ func (cmd *accountCommand) Run(ctx context.Context, root *rootCommand) error {
 			shown(appliance.Type), shown(appliance.Model), appliance.Mode, appliance.Key, shown(appliance.Vector))
 	}
 
-	if err = table.Flush(); err != nil {
+	if err := table.Flush(); err != nil {
 		return fmt.Errorf("writing the appliances: %w", err)
 	}
 
-	return unread
+	return nil
 }
 
 // line reads one line of what is typed or pasted, within ctx and within

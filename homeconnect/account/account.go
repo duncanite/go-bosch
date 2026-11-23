@@ -408,7 +408,43 @@ type listed struct {
 	Model string `json:"vib"`
 }
 
-// get asks the account's API for a path, under the session.
+// archived bounds the archive of an appliance's profile.
+const archived = 16 << 20
+
+// Profile is the archive of an appliance's profile, as the account keeps
+// it: a zip of the two documents that name the appliance's values, which
+// package profile reads. It is the account's own bytes, a stranger's
+// until read, and holds no secret: the key is not in it.
+func (c *Client) Profile(ctx context.Context, session Session, appliance string) ([]byte, error) {
+	if session.token == "" || appliance == "" {
+		return nil, fmt.Errorf("%w: Profile needs the session Finish gave, and an appliance's id", ErrArgument)
+	}
+
+	request, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, c.assets+"/api/iddf/v1/iddf/"+url.PathEscape(appliance), http.NoBody,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrArgument, err)
+	}
+
+	request.Header.Set("Authorization", "Bearer "+session.token)
+
+	status, archive, err := c.fetch(request, archived)
+
+	switch {
+	case err != nil:
+		return nil, err
+	case status == http.StatusUnauthorized:
+		return nil, ErrRegion
+	case status != http.StatusOK:
+		return nil, fmt.Errorf("%w: the profile of %s, with status %d", ErrRefused, appliance, status)
+	}
+
+	return archive, nil
+}
+
+// get asks the account's API for a path, under the session, and reads a
+// JSON answer of status 200 into into; it gives the status.
 func (c *Client) get(ctx context.Context, session Session, path string, into any) (int, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.assets+path, http.NoBody)
 	if err != nil {
@@ -425,6 +461,22 @@ func (c *Client) get(ctx context.Context, session Session, path string, into any
 func (c *Client) exchange(request *http.Request, into any) (int, error) {
 	request.Header.Set("Accept", "application/json")
 
+	status, body, err := c.fetch(request, largest)
+	if err != nil || status != http.StatusOK {
+		return status, err
+	}
+
+	if err = json.Unmarshal(body, into); err != nil {
+		return 0, fmt.Errorf("%w: %w", ErrAnswer, err)
+	}
+
+	return status, nil
+}
+
+// fetch sends a request and gives its status, and the body of an answer
+// of status 200, read within a bound. An answer of another status is not
+// read.
+func (c *Client) fetch(request *http.Request, bound int) (int, []byte, error) {
 	response, err := c.http.Do(request)
 	if err != nil {
 		// A url.Error writes the whole address, the account's id and an
@@ -433,29 +485,25 @@ func (c *Client) exchange(request *http.Request, into any) (int, error) {
 			err = failed.Err
 		}
 
-		return 0, fmt.Errorf("reaching the account at %s: %w", request.URL.Host, err)
+		return 0, nil, fmt.Errorf("reaching the account at %s: %w", request.URL.Host, err)
 	}
 
 	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode != http.StatusOK {
-		return response.StatusCode, nil
+		return response.StatusCode, nil, nil
 	}
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, largest+1))
+	body, err := io.ReadAll(io.LimitReader(response.Body, int64(bound)+1))
 	if err != nil {
-		return 0, fmt.Errorf("reading the account's answer: %w", err)
+		return 0, nil, fmt.Errorf("reading the account's answer: %w", err)
 	}
 
-	if len(body) > largest {
-		return 0, fmt.Errorf("%w: longer than %d bytes", ErrAnswer, largest)
+	if len(body) > bound {
+		return 0, nil, fmt.Errorf("%w: longer than %d bytes", ErrAnswer, bound)
 	}
 
-	if err = json.Unmarshal(body, into); err != nil {
-		return 0, fmt.Errorf("%w: %w", ErrAnswer, err)
-	}
-
-	return response.StatusCode, nil
+	return response.StatusCode, body, nil
 }
 
 // unlock asks for what opens one appliance.

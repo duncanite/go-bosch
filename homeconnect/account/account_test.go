@@ -322,3 +322,52 @@ func TestRegionsAndSecrets(t *testing.T) {
 		t.Errorf("a login and a session print as %s", shown)
 	}
 }
+
+// TestProfile: the archive of an appliance's profile comes as the account
+// keeps it, byte for byte, under the session; one the account has not is
+// a refusal that names the appliance, the wrong region is said as such,
+// and a call with no session or no appliance asks nothing.
+func TestProfile(t *testing.T) {
+	t.Parallel()
+
+	api, client := started(t)
+	api.Add(dishwasher())
+	api.Describe(dishwasher().ID, []byte("PK\x03\x04 an archive, whatever it holds"))
+
+	session := signedIn(t, api, client)
+
+	archive, err := client.Profile(t.Context(), session, dishwasher().ID)
+	if err != nil || string(archive) != "PK\x03\x04 an archive, whatever it holds" {
+		t.Fatalf("Profile = %q, %v", archive, err)
+	}
+
+	if asked := api.Requests(); asked[len(asked)-1] != "GET /api/iddf/v1/iddf/"+dishwasher().ID {
+		t.Errorf("the profile was asked for by %v", asked[len(asked)-1])
+	}
+
+	if _, err = client.Profile(t.Context(), session, oven().ID); !errors.Is(err, account.ErrRefused) ||
+		!strings.Contains(err.Error(), oven().ID) || !strings.Contains(err.Error(), "404") {
+		t.Errorf("Profile of an appliance the account has not described = %v, want ErrRefused", err)
+	}
+
+	api.Status("/api/iddf/v1/iddf/"+dishwasher().ID, 401)
+
+	if _, err = client.Profile(t.Context(), session, dishwasher().ID); !errors.Is(err, account.ErrRegion) {
+		t.Errorf("Profile answered 401 = %v, want ErrRegion", err)
+	}
+
+	before := len(api.Requests())
+
+	for name, call := range map[string]func() error{
+		"no session":   func() error { _, e := client.Profile(t.Context(), account.Session{}, dishwasher().ID); return e },
+		"no appliance": func() error { _, e := client.Profile(t.Context(), session, ""); return e },
+	} {
+		if err = call(); !errors.Is(err, account.ErrArgument) {
+			t.Errorf("Profile with %s = %v, want ErrArgument", name, err)
+		}
+	}
+
+	if len(api.Requests()) != before {
+		t.Errorf("a Profile that lacked what it needs asked the account: %v", api.Requests()[before:])
+	}
+}

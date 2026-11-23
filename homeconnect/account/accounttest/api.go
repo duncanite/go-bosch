@@ -33,6 +33,7 @@ type API struct {
 	challenge  string
 	spent      bool
 	appliances []account.Appliance
+	profiles   map[string][]byte
 	status     map[string]int
 	raw        map[string]string
 	requests   []string
@@ -40,12 +41,13 @@ type API struct {
 
 // New starts the API with no appliance.
 func New() *API {
-	api := &API{status: map[string]int{}, raw: map[string]string{}}
+	api := &API{status: map[string]int{}, raw: map[string]string{}, profiles: map[string][]byte{}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /security/oauth/token", api.token)
 	mux.HandleFunc("GET /api/account/v2/accounts/{account}/paired-appliances", api.paired)
 	mux.HandleFunc("GET /api/appliance/v2/appliances/{id}/encryption-information", api.encryption)
+	mux.HandleFunc("GET /api/iddf/v1/iddf/{id}", api.profile)
 
 	api.server = httptest.NewServer(mux)
 
@@ -64,6 +66,14 @@ func (a *API) Add(appliance account.Appliance) {
 	defer a.mu.Unlock()
 
 	a.appliances = append(a.appliances, appliance)
+}
+
+// Describe gives an appliance of the account the archive of its profile.
+func (a *API) Describe(id string, archive []byte) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.profiles[id] = archive
 }
 
 // Status has a path answered with a status from now on; zero as before.
@@ -237,4 +247,28 @@ func (a *API) encryption(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	writer.WriteHeader(http.StatusNotFound)
+}
+
+func (a *API) profile(writer http.ResponseWriter, request *http.Request) {
+	if a.overridden(writer, request) {
+		return
+	}
+
+	if !signedIn(request) {
+		writer.WriteHeader(http.StatusUnauthorized)
+
+		return
+	}
+
+	a.mu.Lock()
+	archive, described := a.profiles[request.PathValue("id")]
+	a.mu.Unlock()
+
+	if !described {
+		writer.WriteHeader(http.StatusNotFound)
+
+		return
+	}
+
+	_, _ = writer.Write(archive)
 }
